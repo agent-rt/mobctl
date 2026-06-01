@@ -72,12 +72,153 @@ const logs_help =
     \\
 ;
 
+const list_help =
+    \\mobctl <sim|device> list — 列出候选
+    \\
+    \\用法:
+    \\  mobctl sim list    [--platform android|ios] [--json]
+    \\  mobctl device list [--platform android] [--json]
+    \\
+    \\选项:
+    \\  --platform <p>   只列该平台（android / ios）
+    \\  --json           结构化输出
+    \\
+    \\说明:
+    \\  sim list 列出模拟器并关联运行中的实例；device list 列出物理真机
+    \\  （排除模拟器），区分 usb/wifi 连接与 trusted 授权状态。
+    \\
+;
+
+const status_help =
+    \\mobctl <sim|device> status [selector] — 查询单个目标的当前状态
+    \\
+    \\  [selector]   id / name / serial；省略时若唯一候选则自动选中
+    \\  --json       结构化信封输出（含统一 state 与平台 raw_state）
+    \\
+;
+
+const boot_help =
+    \\mobctl sim boot [id|name] — 启动模拟器
+    \\
+    \\  已运行则幂等复用（不重启）。iOS 用 `simctl boot`；Android 后台拉起 emulator。
+    \\  启动后用 `sim wait-ready` / `sim ensure` 等待就绪。
+    \\
+    \\  --json   结构化输出（含耗时、句柄）
+    \\  省略 selector 时若唯一候选则自动选中。
+    \\
+;
+
+const wait_ready_help =
+    \\mobctl <sim|device> wait-ready [selector] — 轮询直到 ready，返回判定证据
+    \\
+    \\  --timeout <秒>   超时（默认 120）
+    \\  --json           结构化输出（含 ready 证据 / 超时原因）
+    \\
+    \\就绪判定:
+    \\  iOS sim：状态 Booted 且可在设备内 spawn 进程（核心服务已起）
+    \\  Android：adb 可见为 device 且 `getprop sys.boot_completed` == 1
+    \\  真机 unauthorized 会立即上报（需在设备上确认 USB 调试授权），不静默重试；
+    \\  offline 视为瞬态，继续轮询到超时。
+    \\
+;
+
+const ensure_help =
+    \\mobctl <sim|device> ensure [selector] — 幂等确保 ready（推荐主入口）
+    \\
+    \\  已 ready：直接复用并返回。
+    \\  未就绪：sim 先 boot 再 wait-ready；真机直接 wait-ready（无 boot）。
+    \\
+    \\  --timeout <秒>   超时（默认 120）
+    \\  --json           结构化输出
+    \\
+;
+
+const shutdown_help =
+    \\mobctl sim shutdown [id|name] — 关闭模拟器
+    \\
+    \\  --force   强制关闭
+    \\  --json    结构化输出
+    \\  已停止则幂等返回（already_stopped）。
+    \\
+;
+
+const reset_help =
+    \\mobctl sim reset [id|name] — 重置到可复用状态（清数据，显式操作）
+    \\
+    \\  iOS：shutdown 后 `simctl erase`；Android：`-wipe-data` 冷启动。
+    \\  运行中的 Android 会被拒绝（device_busy）——请先 shutdown。
+    \\  --json   结构化输出
+    \\
+;
+
+const handle_help =
+    \\mobctl <sim|device> handle [selector] — 导出稳定句柄给下游工具
+    \\
+    \\  必选：transport / connection_hint（+ 信封顶层 kind/platform/device_id/state）
+    \\  平台可选：ready_at / runtime / connection_type / trust_state / app_container_hint
+    \\  --json   结构化输出
+    \\
+;
+
+const connect_help =
+    \\mobctl device connect <ip[:port]> — 通过 wifi 连接真机
+    \\
+    \\  `adb connect`，默认端口 5555。已连接则幂等复用。
+    \\  注意：USB 设备插上即被 `device list` 发现，无需 connect。
+    \\  --json   结构化输出
+    \\
+;
+
+const disconnect_help =
+    \\mobctl device disconnect <serial> — 断开 wifi 连接
+    \\
+    \\  --json   结构化输出
+    \\
+;
+
+const doctor_help =
+    \\mobctl doctor — 诊断 iOS / Android 工具链、SDK、依赖、可发现性
+    \\
+    \\  每项检查返回 status: ok|warn|fail + detail + 可操作 fix。
+    \\  缺某平台工具链 = warn（可只用另一平台）；工具链损坏 = fail。
+    \\  有 fail 时进程退出码为 1。
+    \\  --json   结构化报告
+    \\
+;
+
+const report_help =
+    \\mobctl report — 导出环境聚合报告
+    \\
+    \\  聚合 doctor 检查 + 模拟器/真机清单 + 概要，一次性交给 Agent 决策。
+    \\  --format json|ndjson|md   输出格式（默认 json）
+    \\
+;
+
+const HelpTopic = struct { name: []const u8, text: []const u8 };
+const help_topics = [_]HelpTopic{
+    .{ .name = "list", .text = list_help },
+    .{ .name = "status", .text = status_help },
+    .{ .name = "boot", .text = boot_help },
+    .{ .name = "wait-ready", .text = wait_ready_help },
+    .{ .name = "ensure", .text = ensure_help },
+    .{ .name = "shutdown", .text = shutdown_help },
+    .{ .name = "reset", .text = reset_help },
+    .{ .name = "handle", .text = handle_help },
+    .{ .name = "logs", .text = logs_help },
+    .{ .name = "connect", .text = connect_help },
+    .{ .name = "disconnect", .text = disconnect_help },
+    .{ .name = "doctor", .text = doctor_help },
+    .{ .name = "report", .text = report_help },
+};
+
 fn printHelp(w: *std.Io.Writer, topic: []const u8) !void {
-    if (std.mem.eql(u8, topic, "logs")) {
-        try w.writeAll(logs_help);
-    } else {
-        try w.writeAll(usage);
+    for (help_topics) |t| {
+        if (std.mem.eql(u8, topic, t.name)) {
+            try w.writeAll(t.text);
+            return;
+        }
     }
+    try w.writeAll(usage); // "" 或未知 topic → 总览
 }
 
 pub fn main(init: std.process.Init) !void {
