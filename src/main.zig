@@ -90,6 +90,7 @@ test {
     _ = envelope;
     _ = err;
     _ = @import("shared/exec.zig");
+    _ = @import("shared/logfmt.zig");
     _ = @import("shared/artifact.zig");
     _ = @import("shared/report.zig");
     _ = @import("cli/args.zig");

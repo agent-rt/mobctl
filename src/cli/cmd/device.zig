@@ -7,6 +7,7 @@ const args = @import("../args.zig");
 const envelope = @import("../../shared/envelope.zig");
 const err = @import("../../shared/error.zig");
 const exec = @import("../../shared/exec.zig");
+const logfmt = @import("../../shared/logfmt.zig");
 const discovery = @import("../../device/discovery.zig");
 const wait_mod = @import("../../device/wait_ready.zig");
 const handle_mod = @import("../../device/handle.zig");
@@ -345,6 +346,12 @@ pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
         try emit(w, opts.json, fail, arena);
         return;
     };
-    // 真机恒为 Android → JSON 时解析成结构化 logcat 记录（借鉴 pidcat）。
-    exec.streamLogs(io, argv, w, opts.grep, if (opts.json) .ndjson_logcat else .text);
+    // 真机恒为 Android：JSON→结构化记录；TTY/--color→pretty 着色对齐（借鉴 pidcat）。
+    const tty = std.Io.File.stdout().supportsAnsiEscapeCodes(io) catch false;
+    var printer: logfmt.Printer = .{
+        .format = logfmt.chooseFormat(opts.json, true, tty, opts.color),
+        .width = opts.width orelse 100,
+    };
+    printer.color = printer.format == .pretty;
+    exec.streamLogs(io, argv, w, opts.grep, &printer);
 }

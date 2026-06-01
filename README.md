@@ -131,7 +131,7 @@ mobctl report --format json
 | `device wait-ready <serial\|name> [--timeout <s>]` | 轮询至 ready；`unauthorized` 立即显式上报 |
 | `device ensure <serial\|name>` | 幂等主入口（真机无 boot，已 ready 即复用） |
 | `device handle <serial\|name>` | 导出稳定句柄 |
-| `device logs [serial\|name] [-f] [--grep S] [--pid N] [--package P] [--tag T] [--level W]` | `adb logcat`；dump / `-f` 实时；`--json` 输出**结构化 logcat 记录**（time/pid/tid/level/tag/message，借鉴 [pidcat](https://github.com/JakeWharton/pidcat)）；唯一设备时可省略 selector |
+| `device logs [serial\|name] [-f] [--grep S] [--pid N] [--package P] [--tag T] [--level W] [--color]` | `adb logcat`；dump / `-f` 实时；`--json` 输出**结构化记录**（time/pid/tid/level/tag/message）；TTY 下默认 **pidcat 风格着色对齐**（tag 着色右对齐、level 色块、消息换行），管道/`--no-color` 转纯文本；借鉴 [pidcat](https://github.com/JakeWharton/pidcat)；唯一设备时可省略 selector |
 
 ### 共享命令
 

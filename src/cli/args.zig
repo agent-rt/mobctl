@@ -35,6 +35,10 @@ pub const TargetOpts = struct {
     tag: ?[]const u8 = null,
     /// logs 最低优先级 V/D/I/W/E/F（Android logcat）。
     level: ?[]const u8 = null,
+    /// logs 着色：null=auto(TTY)，true=--color 强制，false=--no-color 关闭。
+    color: ?bool = null,
+    /// logs pretty 换行宽度（默认 100 / COLUMNS）。
+    width: ?u32 = null,
 };
 
 pub const Command = union(enum) {
@@ -114,6 +118,15 @@ fn parseTarget(rest: []const []const u8) TargetOpts {
         } else if (std.mem.eql(u8, a, "--level")) {
             if (next) |v| {
                 opts.level = v;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--color")) {
+            opts.color = true;
+        } else if (std.mem.eql(u8, a, "--no-color")) {
+            opts.color = false;
+        } else if (std.mem.eql(u8, a, "--width")) {
+            if (next) |v| {
+                opts.width = std.fmt.parseInt(u32, v, 10) catch opts.width;
                 i += 1;
             }
         } else if (!std.mem.startsWith(u8, a, "-") and opts.selector.len == 0) {

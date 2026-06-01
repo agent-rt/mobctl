@@ -7,6 +7,7 @@ const args = @import("../args.zig");
 const envelope = @import("../../shared/envelope.zig");
 const err = @import("../../shared/error.zig");
 const exec = @import("../../shared/exec.zig");
+const logfmt = @import("../../shared/logfmt.zig");
 const discovery = @import("../../sim/discovery.zig");
 const boot_mod = @import("../../sim/boot.zig");
 const wait_mod = @import("../../sim/wait_ready.zig");
@@ -434,23 +435,27 @@ pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
         .tag = opts.tag,
         .level = opts.level,
     };
-    // JSON：Android logcat 解析成结构化记录；iOS 格式不同，保留原始行。
-    const fmt: exec.LineFormat = if (!opts.json)
-        .text
-    else if (cand.platform == .android) .ndjson_logcat else .ndjson_raw;
+    // 格式：JSON→结构化(android)/raw(ios)；否则 TTY/--color→pretty，管道→raw。
+    const tty = std.Io.File.stdout().supportsAnsiEscapeCodes(io) catch false;
+    const android = cand.platform == .android;
+    var printer: logfmt.Printer = .{
+        .format = logfmt.chooseFormat(opts.json, android, tty, opts.color),
+        .width = opts.width orelse 100,
+    };
+    printer.color = printer.format == .pretty;
 
     if (logs_mod.isStream(cand, opts.follow)) {
         const argv = logs_mod.prepareStream(arena, io, env, cand, f) catch |e| {
             try emit(w, opts.json, logsFail(arena, cand, e), arena);
             return;
         };
-        exec.streamLogs(io, argv, w, opts.grep, fmt);
+        exec.streamLogs(io, argv, w, opts.grep, &printer);
     } else {
         const text = logs_mod.collectIosDump(arena, io, cand, opts.lines) catch |e| {
             try emit(w, opts.json, logsFail(arena, cand, e), arena);
             return;
         };
-        exec.writeFilteredText(w, text, opts.grep, fmt);
+        exec.writeFilteredText(w, text, opts.grep, &printer);
     }
 }
 
