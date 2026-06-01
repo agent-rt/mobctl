@@ -23,7 +23,7 @@ jobs:
     name: Build & publish
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Resolve tag
         id: tag
@@ -65,7 +65,7 @@ jobs:
           echo "sha256=${SHA}"                      >> "$GITHUB_OUTPUT"
 
       - name: Publish to project release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           files: |
