@@ -35,7 +35,50 @@ const usage =
     \\  mobctl doctor         [--json]
     \\  mobctl report         [--format json|ndjson|md]
     \\
+    \\`<cmd> --help` 查看某命令详情（如 `mobctl device logs --help`）。
+    \\
 ;
+
+const logs_help =
+    \\mobctl <sim|device> logs — 采集日志（调试利器）
+    \\
+    \\用法:
+    \\  mobctl device logs [serial|name] [选项]
+    \\  mobctl sim logs    [id|name]     [选项]
+    \\
+    \\目标:
+    \\  省略 selector 时，若只有一个候选则自动选中。
+    \\
+    \\过滤（可组合）:
+    \\  --grep <子串>          只输出包含该子串的行（进程内，跨平台）
+    \\  --pid <pid>            只看该进程（Android logcat --pid）
+    \\  --package <pkg>        只看该包的进程（pidof 解析，支持多进程）
+    \\  --tag <tag>            只看该 tag（Android logcat filterspec）
+    \\  --level <V|D|I|W|E|F>  最低优先级（Android）
+    \\
+    \\模式:
+    \\  -f, --follow           实时跟随（tail -f 式），Ctrl-C 结束
+    \\  --lines <N>            dump 模式行数上限（默认 200）
+    \\
+    \\输出:
+    \\  --json                 结构化 NDJSON（Android 解析成 time/pid/tid/level/tag/message）
+    \\  --color / --no-color   强制 / 关闭着色（默认 TTY 自动开 pidcat 风格着色对齐）
+    \\  --width <N>            pretty 换行宽度（默认 100）
+    \\
+    \\示例:
+    \\  mobctl device logs --package com.example.app -f      # 跟随某 app 的日志
+    \\  mobctl device logs --level E --lines 500             # 最近 500 行里的错误
+    \\  mobctl device logs --grep ANR --json                 # 含 ANR 的行，结构化输出
+    \\
+;
+
+fn printHelp(w: *std.Io.Writer, topic: []const u8) !void {
+    if (std.mem.eql(u8, topic, "logs")) {
+        try w.writeAll(logs_help);
+    } else {
+        try w.writeAll(usage);
+    }
+}
 
 pub fn main(init: std.process.Init) !void {
     const arena = init.arena.allocator();
@@ -73,7 +116,7 @@ pub fn main(init: std.process.Init) !void {
             }
         },
         .report => |fmt| try report_cmd.run(arena, init.io, init.environ_map, w, fmt),
-        .help => try w.writeAll(usage),
+        .help => |topic| try printHelp(w, topic),
         .unknown => |tok| {
             var ew: Io.File.Writer = .init(.stderr(), init.io, &buf);
             try ew.interface.print("unknown command: {s}\n\n", .{tok});

@@ -61,10 +61,21 @@ pub const Command = union(enum) {
     device_disconnect: TargetOpts,
     doctor: bool, // json?
     report: ReportFormat,
-    help,
+    /// 帮助，携带 topic（如 "logs" / "boot" / ""）决定显示哪段。
+    help: []const u8,
     /// 未识别 / 未实现的子命令，带上原始 token 供报错。
     unknown: []const u8,
 };
+
+/// help 之前最后一个非 flag token，作为帮助主题（无则 ""）。
+fn helpTopic(args: []const []const u8) []const u8 {
+    var topic: []const u8 = "";
+    for (args) |a| {
+        if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) break;
+        if (!std.mem.startsWith(u8, a, "-")) topic = a;
+    }
+    return topic;
+}
 
 fn parsePlatform(s: []const u8) ?envelope.Platform {
     if (std.mem.eql(u8, s, "android")) return .android;
@@ -138,8 +149,12 @@ fn parseTarget(rest: []const []const u8) TargetOpts {
 
 /// `args` 是去掉程序名后的 argv（即 `argv[1..]`）。
 pub fn parse(args: []const []const u8) Command {
-    if (args.len == 0) return .help;
-    if (std.mem.eql(u8, args[0], "--help") or std.mem.eql(u8, args[0], "-h")) return .help;
+    if (args.len == 0) return .{ .help = "" };
+    // 任意位置出现 --help/-h → 帮助；topic = help 之前最后一个非 flag token
+    // （"device logs --help" → "logs"，"sim boot --help" → "boot"）。
+    for (args) |a| {
+        if (std.mem.eql(u8, a, "--help") or std.mem.eql(u8, a, "-h")) return .{ .help = helpTopic(args) };
+    }
 
     if (std.mem.eql(u8, args[0], "doctor")) {
         var json = false;
@@ -264,6 +279,13 @@ test "parse sim boot without selector → empty (resolve picks sole candidate)" 
     const c = parse(&.{ "sim", "boot" });
     try std.testing.expect(c == .sim_boot);
     try std.testing.expectEqualStrings("", c.sim_boot.selector);
+}
+
+test "parse --help → help with topic" {
+    try std.testing.expectEqualStrings("logs", parse(&.{ "device", "logs", "--help" }).help);
+    try std.testing.expectEqualStrings("boot", parse(&.{ "sim", "boot", "-h" }).help);
+    try std.testing.expectEqualStrings("", parse(&.{"--help"}).help);
+    try std.testing.expectEqualStrings("", parse(&.{}).help);
 }
 
 test "parse logs filters: follow / grep / pid / package / tag" {
