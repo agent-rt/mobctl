@@ -104,7 +104,7 @@ mobctl report --format json
 
 ## 命令参考
 
-每个命令都支持 `--json` 输出统一信封。
+每个命令都支持 `--json` 输出统一信封；每个命令也都有专属帮助 —— `mobctl <命令> --help`（如 `mobctl device logs --help`）查看该命令的全部选项、语义与示例。
 
 ### `sim` — 模拟器（Android Emulator / iOS Simulator）
 
@@ -139,6 +139,37 @@ mobctl report --format json
 |------|------|
 | `doctor [--json]` | 诊断工具链 / SDK / 依赖，每项 `status: ok\|warn\|fail` + `detail` + `fix` |
 | `report [--format json\|ndjson\|md]` | 聚合体检 + 设备清单为一份机器可读报告 |
+
+### 日志调试（`logs`）
+
+`logs` 同时照顾三类受众：
+
+- **人类**（TTY）→ [pidcat](https://github.com/JakeWharton/pidcat) 风格着色对齐（tag 按名着色右对齐、level 色块、消息换行、连续同 tag 留空）
+- **脚本**（管道 / `--no-color`）→ 纯 logcat 文本，可直接 `grep`
+- **Agent**（`--json`）→ 结构化记录，无需正则即可按字段过滤
+
+过滤选项可任意组合：
+
+| 选项 | 作用 |
+|------|------|
+| `--grep <子串>` | 只输出含该子串的行（进程内，跨平台） |
+| `--pid <pid>` | 只看该进程（Android） |
+| `--package <pkg>` | 只看该包的进程（`pidof` 解析，支持多进程） |
+| `--tag <tag>` / `--level <V\|D\|I\|W\|E\|F>` | 按 tag / 最低优先级过滤（Android） |
+| `-f, --follow` | 实时跟随（`tail -f` 式），Ctrl-C 结束 |
+| `--lines <N>` | dump 行数上限（默认 200） |
+
+```bash
+mobctl device logs --package com.example.app -f   # 跟随某 app 的日志
+mobctl device logs --level E --lines 500          # 最近 500 行里的错误
+mobctl device logs --grep ANR --json              # 含 ANR 的行 → 结构化记录
+```
+
+`--json` 时每行解析为：
+
+```json
+{"time":"06-01 16:06:33.243","pid":2892,"tid":2892,"level":"D","tag":"DeviceStatisticsService","message":"onReceive: ..."}
+```
 
 ## 统一输出契约
 
