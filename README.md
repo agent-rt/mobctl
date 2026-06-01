@@ -118,7 +118,7 @@ mobctl report --format json
 | `sim shutdown <id\|name> [--force]` | 关闭 |
 | `sim reset <id\|name>` | 显式重置（清数据） |
 | `sim handle <id\|name>` | 导出稳定句柄 |
-| `sim logs <id\|name> [--lines N]` | 采集日志（文本 / NDJSON） |
+| `sim logs [id\|name] [-f] [--grep S] [--lines N]` | 采集日志（dump / `-f` 实时；文本 / NDJSON）；省略 selector 时若唯一则自动选中 |
 
 ### `device` — 真机（Android，iOS 真机为 P1）
 
@@ -131,7 +131,7 @@ mobctl report --format json
 | `device wait-ready <serial\|name> [--timeout <s>]` | 轮询至 ready；`unauthorized` 立即显式上报 |
 | `device ensure <serial\|name>` | 幂等主入口（真机无 boot，已 ready 即复用） |
 | `device handle <serial\|name>` | 导出稳定句柄 |
-| `device logs <serial\|name> [--lines N]` | `adb logcat`（文本 / NDJSON） |
+| `device logs [serial\|name] [-f] [--grep S] [--pid N] [--package P] [--tag T] [--level W]` | `adb logcat`；dump / `-f` 实时；`--json` 输出**结构化 logcat 记录**（time/pid/tid/level/tag/message，借鉴 [pidcat](https://github.com/JakeWharton/pidcat)）；唯一设备时可省略 selector |
 
 ### 共享命令
 

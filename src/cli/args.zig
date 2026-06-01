@@ -12,16 +12,29 @@ pub const ListOpts = struct {
 
 pub const ReportFormat = enum { json, ndjson, md };
 
-/// 针对单个目标的命令共用选项：selector（id 或 name）+ json + 超时。
+/// 针对单个目标的命令共用选项。`selector` 可为空——resolve 时若只有一个候选则
+/// 自动选中（REQ §5.2「自动选择默认设备」）。
 pub const TargetOpts = struct {
-    selector: []const u8,
+    selector: []const u8 = "",
     json: bool = false,
     /// ready 等待超时（毫秒）。默认 120s。
     timeout_ms: u64 = 120_000,
     /// shutdown 是否强制。
     force: bool = false,
-    /// logs 采集行数上限。
+    /// logs 采集行数上限（dump 模式）。
     lines: u32 = 200,
+    /// logs 实时跟随（tail -f 式）。
+    follow: bool = false,
+    /// logs 关键词过滤（子串，跨平台，在进程内过滤）。
+    grep: ?[]const u8 = null,
+    /// logs 按进程 pid 过滤（Android logcat --pid）。
+    pid: ?[]const u8 = null,
+    /// logs 按包名过滤（Android：先 pidof 解析成 pid）。
+    package: ?[]const u8 = null,
+    /// logs 按 tag 过滤（Android logcat filterspec）。
+    tag: ?[]const u8 = null,
+    /// logs 最低优先级 V/D/I/W/E/F（Android logcat）。
+    level: ?[]const u8 = null,
 };
 
 pub const Command = union(enum) {
@@ -55,35 +68,59 @@ fn parsePlatform(s: []const u8) ?envelope.Platform {
     return null;
 }
 
-/// 解析 `<selector> [--json] [--timeout <seconds>]`；缺 selector 返回 null。
-fn parseTarget(rest: []const []const u8) ?TargetOpts {
-    var opts: TargetOpts = .{ .selector = "" };
+/// 解析 `[selector] [flags...]`。selector 可省略（留空，由 resolve 默认选中）。
+fn parseTarget(rest: []const []const u8) TargetOpts {
+    var opts: TargetOpts = .{};
     var i: usize = 0;
     while (i < rest.len) : (i += 1) {
         const a = rest[i];
+        const next: ?[]const u8 = if (i + 1 < rest.len) rest[i + 1] else null;
         if (std.mem.eql(u8, a, "--json")) {
             opts.json = true;
         } else if (std.mem.eql(u8, a, "--force")) {
             opts.force = true;
+        } else if (std.mem.eql(u8, a, "--follow") or std.mem.eql(u8, a, "-f")) {
+            opts.follow = true;
         } else if (std.mem.eql(u8, a, "--timeout")) {
-            if (i + 1 < rest.len) {
-                if (std.fmt.parseInt(u64, rest[i + 1], 10)) |secs| {
-                    opts.timeout_ms = secs * 1000;
-                } else |_| {}
+            if (next) |v| {
+                opts.timeout_ms = (std.fmt.parseInt(u64, v, 10) catch opts.timeout_ms / 1000) * 1000;
                 i += 1;
             }
         } else if (std.mem.eql(u8, a, "--lines")) {
-            if (i + 1 < rest.len) {
-                if (std.fmt.parseInt(u32, rest[i + 1], 10)) |n| {
-                    opts.lines = n;
-                } else |_| {}
+            if (next) |v| {
+                opts.lines = std.fmt.parseInt(u32, v, 10) catch opts.lines;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--grep")) {
+            if (next) |v| {
+                opts.grep = v;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--pid")) {
+            if (next) |v| {
+                opts.pid = v;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--package")) {
+            if (next) |v| {
+                opts.package = v;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--tag")) {
+            if (next) |v| {
+                opts.tag = v;
+                i += 1;
+            }
+        } else if (std.mem.eql(u8, a, "--level")) {
+            if (next) |v| {
+                opts.level = v;
                 i += 1;
             }
         } else if (!std.mem.startsWith(u8, a, "-") and opts.selector.len == 0) {
             opts.selector = a;
         }
     }
-    return if (opts.selector.len == 0) null else opts;
+    return opts;
 }
 
 /// `args` 是去掉程序名后的 argv（即 `argv[1..]`）。
@@ -125,7 +162,7 @@ pub fn parse(args: []const []const u8) Command {
             std.mem.eql(u8, sub, "shutdown") or std.mem.eql(u8, sub, "handle") or
             std.mem.eql(u8, sub, "reset") or std.mem.eql(u8, sub, "logs");
         if (is_target) {
-            const opts = parseTarget(args[2..]) orelse return .{ .unknown = sub };
+            const opts = parseTarget(args[2..]);
             if (std.mem.eql(u8, sub, "status")) return .{ .sim_status = opts };
             if (std.mem.eql(u8, sub, "boot")) return .{ .sim_boot = opts };
             if (std.mem.eql(u8, sub, "wait-ready")) return .{ .sim_wait_ready = opts };
@@ -146,7 +183,7 @@ pub fn parse(args: []const []const u8) Command {
             std.mem.eql(u8, sub, "ensure") or std.mem.eql(u8, sub, "handle") or std.mem.eql(u8, sub, "logs") or
             std.mem.eql(u8, sub, "connect") or std.mem.eql(u8, sub, "disconnect");
         if (is_target) {
-            const opts = parseTarget(args[2..]) orelse return .{ .unknown = sub };
+            const opts = parseTarget(args[2..]);
             if (std.mem.eql(u8, sub, "status")) return .{ .device_status = opts };
             if (std.mem.eql(u8, sub, "wait-ready")) return .{ .device_wait_ready = opts };
             if (std.mem.eql(u8, sub, "ensure")) return .{ .device_ensure = opts };
@@ -210,7 +247,19 @@ test "parse sim boot / status with selector" {
     try std.testing.expect(!s.sim_status.json);
 }
 
-test "parse sim boot without selector is unknown" {
+test "parse sim boot without selector → empty (resolve picks sole candidate)" {
     const c = parse(&.{ "sim", "boot" });
-    try std.testing.expect(c == .unknown);
+    try std.testing.expect(c == .sim_boot);
+    try std.testing.expectEqualStrings("", c.sim_boot.selector);
+}
+
+test "parse logs filters: follow / grep / pid / package / tag" {
+    const c = parse(&.{ "device", "logs", "-f", "--grep", "ANR", "--pid", "1234", "--tag", "ActivityManager" });
+    try std.testing.expect(c == .device_logs);
+    const o = c.device_logs;
+    try std.testing.expect(o.follow);
+    try std.testing.expectEqualStrings("ANR", o.grep.?);
+    try std.testing.expectEqualStrings("1234", o.pid.?);
+    try std.testing.expectEqualStrings("ActivityManager", o.tag.?);
+    try std.testing.expectEqualStrings("", o.selector); // 无 selector → 默认选中
 }

@@ -1,39 +1,45 @@
-//! sim 日志采集（REQ §6.16）。返回有界的原始日志文本，由 cmd 决定落盘 /
-//! NDJSON 包装。需设备 ready（日志来自运行中的实例）。
+//! sim 日志采集（REQ §6.16）。
 //!
-//! Android：`adb -s <serial> logcat -d -t <lines>`（-d 立即返回，-t 限行）。
-//! iOS：`xcrun simctl spawn <udid> log show --last 2m --style compact`，
-//!      取末尾 <lines> 行。
+//! Android：复用 device/logs 的 `adb logcat` argv 构建器（dump / follow / pid / tag）。
+//! iOS：follow → `simctl spawn <udid> log stream`（流式）；dump → `log show` 取末尾 N 行。
+//! grep 在进程内过滤；pid/tag/package 是 Android-only，iOS 忽略。
 
 const std = @import("std");
 const Io = std.Io;
 const EnvMap = std.process.Environ.Map;
 const exec = @import("../shared/exec.zig");
-const discovery = @import("discovery.zig");
+const sim_discovery = @import("discovery.zig");
+const device_logs = @import("../device/logs.zig");
 
-pub const Error = error{ NotReady, ToolMissing, NoLogs };
+pub const Error = device_logs.Error;
+pub const Filter = device_logs.Filter;
 
-pub fn collect(arena: std.mem.Allocator, io: Io, env: *const EnvMap, cand: discovery.Candidate, lines: u32) Error![]const u8 {
+/// 该候选是否走流式输出：Android 任意 / iOS follow。iOS dump 走 collectIosDump。
+pub fn isStream(cand: sim_discovery.Candidate, follow: bool) bool {
+    return cand.platform == .android or follow;
+}
+
+/// 流式 argv：Android `adb logcat` / iOS `simctl spawn log stream`。
+pub fn prepareStream(arena: std.mem.Allocator, io: Io, env: *const EnvMap, cand: sim_discovery.Candidate, f: Filter) Error![]const []const u8 {
     if (cand.state != .ready) return error.NotReady;
-    return switch (cand.platform) {
-        .ios => collectIos(arena, io, cand, lines),
-        .android => collectAndroid(arena, io, env, cand, lines),
-    };
+    if (cand.platform == .android) {
+        const adb = sim_discovery.adbBin(arena, io, env) orelse return error.ToolMissing;
+        return device_logs.buildLogcatArgv(arena, io, adb, cand.id, f);
+    }
+    // iOS follow
+    var a: std.ArrayList([]const u8) = .empty;
+    for ([_][]const u8{ "xcrun", "simctl", "spawn", cand.id, "log", "stream", "--style", "compact" }) |tok|
+        try a.append(arena, tok);
+    return a.toOwnedSlice(arena);
 }
 
-fn collectAndroid(arena: std.mem.Allocator, io: Io, env: *const EnvMap, cand: discovery.Candidate, lines: u32) Error![]const u8 {
-    const adb = discovery.adbBin(arena, io, env) orelse return error.ToolMissing;
-    const t = std.fmt.allocPrint(arena, "{d}", .{lines}) catch return error.NoLogs;
-    const r = exec.capture(arena, io, &.{ adb, "-s", cand.id, "logcat", "-d", "-t", t }) orelse return error.ToolMissing;
-    if (!r.ok()) return error.NoLogs;
-    return r.stdout;
-}
-
-fn collectIos(arena: std.mem.Allocator, io: Io, cand: discovery.Candidate, lines: u32) Error![]const u8 {
+/// iOS dump：`log show --last 2m` 取末尾 N 行。
+pub fn collectIosDump(arena: std.mem.Allocator, io: Io, cand: sim_discovery.Candidate, lines: u32) Error![]const u8 {
+    if (cand.state != .ready) return error.NotReady;
     const r = exec.capture(arena, io, &.{
         "xcrun", "simctl", "spawn", cand.id, "log", "show", "--last", "2m", "--style", "compact",
     }) orelse return error.ToolMissing;
-    if (!r.ok()) return error.NoLogs;
+    if (!r.ok()) return error.ToolMissing;
     return lastLines(r.stdout, lines);
 }
 
@@ -42,7 +48,6 @@ fn lastLines(text: []const u8, n: u32) []const u8 {
     if (n == 0 or text.len == 0) return text;
     var count: u32 = 0;
     var i: usize = text.len;
-    // 跳过结尾换行
     if (i > 0 and text[i - 1] == '\n') i -= 1;
     while (i > 0) : (i -= 1) {
         if (text[i - 1] == '\n') {

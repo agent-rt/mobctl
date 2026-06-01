@@ -6,6 +6,7 @@ const EnvMap = std.process.Environ.Map;
 const args = @import("../args.zig");
 const envelope = @import("../../shared/envelope.zig");
 const err = @import("../../shared/error.zig");
+const exec = @import("../../shared/exec.zig");
 const discovery = @import("../../device/discovery.zig");
 const wait_mod = @import("../../device/wait_ready.zig");
 const handle_mod = @import("../../device/handle.zig");
@@ -55,6 +56,12 @@ pub fn list(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
 const Resolution = union(enum) { one: discovery.Candidate, none, ambiguous: usize };
 
 fn resolve(candidates: []const discovery.Candidate, selector: []const u8) Resolution {
+    // selector 为空 → 只有一台真机时默认选中（REQ §5.2）。
+    if (selector.len == 0) return switch (candidates.len) {
+        0 => .none,
+        1 => .{ .one = candidates[0] },
+        else => .{ .ambiguous = candidates.len },
+    };
     for (candidates) |c| {
         if (std.mem.eql(u8, c.id, selector)) return .{ .one = c };
     }
@@ -241,6 +248,12 @@ fn dupStr(arena: std.mem.Allocator, s: []const u8) []const []const u8 {
 
 /// `mobctl device connect <ip[:port]>` —— wifi 连接（target 是地址，不经发现解析）。
 pub fn connect(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer, opts: args.TargetOpts) !void {
+    if (opts.selector.len == 0) {
+        var e = notFound("device connect", "");
+        e.@"error" = err.Info.fromKind(.device_not_found, "connect requires an address, e.g. `device connect 192.168.1.42:5555`");
+        try emit(w, opts.json, e, arena);
+        return;
+    }
     const oc = connect_mod.connect(arena, io, env, opts.selector) orelse {
         var fail = notFound("device connect", opts.selector);
         fail.@"error" = err.Info.fromKind(.dependency_missing, "adb not found");
@@ -271,6 +284,12 @@ pub fn connect(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writ
 
 /// `mobctl device disconnect <serial>` —— 断开 wifi 连接。
 pub fn disconnect(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer, opts: args.TargetOpts) !void {
+    if (opts.selector.len == 0) {
+        var e = notFound("device disconnect", "");
+        e.@"error" = err.Info.fromKind(.device_not_found, "disconnect requires a serial, e.g. `device disconnect 192.168.1.42:5555`");
+        try emit(w, opts.json, e, arena);
+        return;
+    }
     const oc = disconnect_mod.disconnect(arena, io, env, opts.selector) orelse {
         var fail = notFound("device disconnect", opts.selector);
         fail.@"error" = err.Info.fromKind(.dependency_missing, "adb not found");
@@ -290,7 +309,7 @@ pub fn disconnect(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.W
     try emit(w, opts.json, e, arena);
 }
 
-/// `mobctl device logs <selector> [--lines N] [--json]`。
+/// `mobctl device logs [selector] [-f] [--lines N] [--grep S] [--pid N] [--package P] [--tag T] [--json]`。
 pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer, opts: args.TargetOpts) !void {
     const candidates = try discovery.list(arena, io, env, null);
     const cand = switch (resolve(candidates, opts.selector)) {
@@ -304,11 +323,19 @@ pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
         },
         .one => |c| c,
     };
-    const text = logs_mod.collect(arena, io, env, cand, opts.lines) catch |e| {
+    const f: logs_mod.Filter = .{
+        .follow = opts.follow,
+        .lines = opts.lines,
+        .pid = opts.pid,
+        .package = opts.package,
+        .tag = opts.tag,
+        .level = opts.level,
+    };
+    const argv = logs_mod.prepare(arena, io, env, cand, f) catch |e| {
         const kind: err.Kind = switch (e) {
-            error.ToolMissing => .dependency_missing,
             error.NotReady => .device_busy,
-            error.NoLogs => .unknown_error,
+            error.ToolMissing => .dependency_missing,
+            error.OutOfMemory => .unknown_error,
         };
         var fail = notFound("device logs", cand.id);
         fail.platform = cand.platform;
@@ -318,17 +345,6 @@ pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
         try emit(w, opts.json, fail, arena);
         return;
     };
-
-    if (opts.json) {
-        const Line = struct { line: []const u8 };
-        var it = std.mem.splitScalar(u8, text, '\n');
-        while (it.next()) |ln| {
-            if (ln.len == 0) continue;
-            try std.json.Stringify.value(Line{ .line = ln }, .{}, w);
-            try w.writeByte('\n');
-        }
-    } else {
-        try w.writeAll(text);
-        if (text.len > 0 and text[text.len - 1] != '\n') try w.writeByte('\n');
-    }
+    // 真机恒为 Android → JSON 时解析成结构化 logcat 记录（借鉴 pidcat）。
+    exec.streamLogs(io, argv, w, opts.grep, if (opts.json) .ndjson_logcat else .text);
 }

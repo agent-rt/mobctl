@@ -23,13 +23,13 @@ const usage =
     \\  mobctl sim shutdown   <id|name> [--json] [--force]
     \\  mobctl sim handle     <id|name> [--json]
     \\  mobctl sim reset      <id|name> [--json]
-    \\  mobctl sim logs       <id|name> [--lines N] [--json]
+    \\  mobctl sim logs       [id|name] [-f] [--lines N] [--grep S] [--json]
     \\  mobctl device list       [--platform android] [--json]
     \\  mobctl device status     <serial|name> [--json]
     \\  mobctl device wait-ready <serial|name> [--json] [--timeout <s>]
     \\  mobctl device ensure     <serial|name> [--json] [--timeout <s>]
     \\  mobctl device handle     <serial|name> [--json]
-    \\  mobctl device logs       <serial|name> [--lines N] [--json]
+    \\  mobctl device logs       [serial|name] [-f] [--lines N] [--grep S] [--pid N] [--package P] [--tag T] [--level W] [--json]
     \\  mobctl device connect    <ip[:port]> [--json]
     \\  mobctl device disconnect <serial> [--json]
     \\  mobctl doctor         [--json]
@@ -89,6 +89,7 @@ pub fn main(init: std.process.Init) !void {
 test {
     _ = envelope;
     _ = err;
+    _ = @import("shared/exec.zig");
     _ = @import("shared/artifact.zig");
     _ = @import("shared/report.zig");
     _ = @import("cli/args.zig");

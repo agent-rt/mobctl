@@ -6,6 +6,7 @@ const EnvMap = std.process.Environ.Map;
 const args = @import("../args.zig");
 const envelope = @import("../../shared/envelope.zig");
 const err = @import("../../shared/error.zig");
+const exec = @import("../../shared/exec.zig");
 const discovery = @import("../../sim/discovery.zig");
 const boot_mod = @import("../../sim/boot.zig");
 const wait_mod = @import("../../sim/wait_ready.zig");
@@ -60,7 +61,13 @@ const Resolution = union(enum) {
 };
 
 /// 先按 id 精确匹配（唯一），否则按 name 匹配（可能多个）。
+/// selector 为空时：恰好一个候选则默认选中，否则 none/ambiguous。
 fn resolve(candidates: []const discovery.Candidate, selector: []const u8) Resolution {
+    if (selector.len == 0) return switch (candidates.len) {
+        0 => .none,
+        1 => .{ .one = candidates[0] },
+        else => .{ .ambiguous = candidates.len },
+    };
     for (candidates) |c| {
         if (std.mem.eql(u8, c.id, selector)) return .{ .one = c };
     }
@@ -404,8 +411,8 @@ pub fn reset(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer
     try emit(w, opts.json, e, arena);
 }
 
-/// `mobctl sim logs <selector> [--lines N] [--json]` —— 采集日志。
-/// 默认原始文本；`--json` 输出 NDJSON（每行一个 {"line":...}）。
+/// `mobctl sim logs [selector] [-f] [--lines N] [--grep S] [--json]` —— 采集日志。
+/// Android / iOS-follow 走流式；iOS dump 取末尾 N 行。`--json` 输出 NDJSON。
 pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer, opts: args.TargetOpts) !void {
     const candidates = try discovery.list(arena, io, env, null);
     const cand = switch (resolve(candidates, opts.selector)) {
@@ -419,31 +426,44 @@ pub fn logs(arena: std.mem.Allocator, io: Io, env: *const EnvMap, w: *Io.Writer,
         },
         .one => |c| c,
     };
-    const text = logs_mod.collect(arena, io, env, cand, opts.lines) catch |e| {
-        const kind: err.Kind = switch (e) {
-            error.ToolMissing => .dependency_missing,
-            error.NotReady => .device_busy,
-            error.NoLogs => .unknown_error,
-        };
-        var fail = notFound("sim logs", cand.id);
-        fail.platform = cand.platform;
-        var info = err.Info.fromKind(kind, "could not collect logs");
-        if (kind == .device_busy) info.diagnostics = dupStr(arena, "device not ready; boot it first");
-        fail.@"error" = info;
-        try emit(w, opts.json, fail, arena);
-        return;
+    const f: logs_mod.Filter = .{
+        .follow = opts.follow,
+        .lines = opts.lines,
+        .pid = opts.pid,
+        .package = opts.package,
+        .tag = opts.tag,
+        .level = opts.level,
     };
+    // JSON：Android logcat 解析成结构化记录；iOS 格式不同，保留原始行。
+    const fmt: exec.LineFormat = if (!opts.json)
+        .text
+    else if (cand.platform == .android) .ndjson_logcat else .ndjson_raw;
 
-    if (opts.json) {
-        const Line = struct { line: []const u8 };
-        var it = std.mem.splitScalar(u8, text, '\n');
-        while (it.next()) |ln| {
-            if (ln.len == 0) continue;
-            try std.json.Stringify.value(Line{ .line = ln }, .{}, w);
-            try w.writeByte('\n');
-        }
+    if (logs_mod.isStream(cand, opts.follow)) {
+        const argv = logs_mod.prepareStream(arena, io, env, cand, f) catch |e| {
+            try emit(w, opts.json, logsFail(arena, cand, e), arena);
+            return;
+        };
+        exec.streamLogs(io, argv, w, opts.grep, fmt);
     } else {
-        try w.writeAll(text);
-        if (text.len > 0 and text[text.len - 1] != '\n') try w.writeByte('\n');
+        const text = logs_mod.collectIosDump(arena, io, cand, opts.lines) catch |e| {
+            try emit(w, opts.json, logsFail(arena, cand, e), arena);
+            return;
+        };
+        exec.writeFilteredText(w, text, opts.grep, fmt);
     }
+}
+
+fn logsFail(arena: std.mem.Allocator, cand: discovery.Candidate, e: anyerror) envelope.Envelope {
+    const kind: err.Kind = switch (e) {
+        error.NotReady => .device_busy,
+        error.ToolMissing => .dependency_missing,
+        else => .unknown_error,
+    };
+    var fail = notFound("sim logs", cand.id);
+    fail.platform = cand.platform;
+    var info = err.Info.fromKind(kind, "could not collect logs");
+    if (kind == .device_busy) info.diagnostics = dupStr(arena, "device not ready; boot it first");
+    fail.@"error" = info;
+    return fail;
 }
